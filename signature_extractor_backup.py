@@ -5,7 +5,7 @@ from PIL import Image
 import json
 import sqlite3
 from typing import List, Dict, Tuple, Optional
-from transformers import AutoModel, AutoTokenizer, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics.pairwise import cosine_similarity
@@ -54,7 +54,7 @@ class SignatureExtractor:
         print(f"Loading {self.model_name}...")
         try:
             self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-            self.model = AutoModel.from_pretrained(
+            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 self.model_name, 
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
                 device_map="auto" if self.device == "cuda" else None,
@@ -68,7 +68,7 @@ class SignatureExtractor:
                 print("Trying with smaller 2B model due to memory constraints...")
                 self.model_name = "Qwen/Qwen2-VL-2B-Instruct"
                 self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-                self.model = AutoModel.from_pretrained(
+                self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                     self.model_name, 
                     torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
                     device_map="auto" if self.device == "cuda" else None,

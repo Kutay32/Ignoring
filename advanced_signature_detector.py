@@ -69,10 +69,10 @@ class AdvancedSignatureDetector:
         """Load the specified Qwen model"""
         print(f"Loading {self.model_name}...")
         try:
-            from transformers import AutoModel, AutoProcessor
+            from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
             
             self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-            self.model = AutoModel.from_pretrained(
+            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 self.model_name, 
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
                 device_map="auto" if self.device == "cuda" else None,

@@ -12,22 +12,31 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 import seaborn as sns
+from ultralytics import YOLO
 
 class AdvancedSignatureDetector:
-    def __init__(self, model_name: str = "Qwen/Qwen2-VL-2B-Instruct"):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct", yolo_weights_path: str = "weights/yolov8s.pt", use_quantization: bool = True):
         """
-        Advanced signature detection and comparison system using Qwen VLM
-        
+        Advanced signature detection and comparison system using YOLOv8 for detection and Qwen VLM for analysis
+
         Args:
-            model_name: Qwen model variant to use
+            model_name: Qwen model variant to use (default: Qwen2.5-VL-7B-Instruct for optimal performance)
+            yolo_weights_path: Path to YOLOv8 weights file
+            use_quantization: Whether to use 8-bit quantization to reduce memory usage
         """
         self.model_name = model_name
+        self.yolo_weights_path = yolo_weights_path
+        self.use_quantization = use_quantization
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = None
         self.processor = None
+        self.yolo_model = None
         self.db_path = "advanced_signatures.db"
         self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+        self.signatures_cache = None  # Cache for database signatures
+        self.cache_timestamp = None   # Cache timestamp for invalidation
         self._init_database()
+        self._load_yolo_model()
         
     def _init_database(self):
         """Initialize enhanced SQLite database for signature storage"""
@@ -64,56 +73,223 @@ class AdvancedSignatureDetector:
         
         conn.commit()
         conn.close()
-    
-    def load_model(self):
-        """Load the specified Qwen model"""
-        print(f"Loading {self.model_name}...")
+
+    def _load_yolo_model(self):
+        """Load YOLOv8 model for signature detection"""
         try:
-            from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-            
-            self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
-            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-                self.model_name, 
+            if os.path.exists(self.yolo_weights_path):
+                print(f"Loading YOLOv8 model from {self.yolo_weights_path}...")
+                self.yolo_model = YOLO(self.yolo_weights_path)
+                print("YOLOv8 model loaded successfully!")
+            else:
+                print(f"YOLO weights file not found at {self.yolo_weights_path}, falling back to OpenCV detection")
+                self.yolo_model = None
+        except Exception as e:
+            print(f"Error loading YOLO model: {e}, falling back to OpenCV detection")
+            self.yolo_model = None
+
+    def load_model(self):
+        """Load the specified Qwen model with caching"""
+        if self.model is not None and self.processor is not None:
+            print("Model already loaded, skipping...")
+            return
+
+        print(f"Loading {self.model_name}...")
+        print("This may take several minutes. Please wait...")
+        try:
+            # Handle different Qwen model versions
+            if "Qwen2.5-VL" in self.model_name:
+                # For Qwen2.5-VL models
+                from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+                print("Loading processor...")
+                self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
+
+                # Try loading with quantization first (if enabled and available)
+                if self.use_quantization and self.device == "cuda":
+                    try:
+                        print("Attempting to load with 8-bit quantization...")
+                        print("This will load 5 model shards. Please be patient...")
+                        from transformers import BitsAndBytesConfig
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_8bit=True,
+                            llm_int8_enable_fp32_cpu_offload=True
+                        )
+                        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                            self.model_name,
+                            quantization_config=quantization_config,
+                            device_map="auto",
+                            trust_remote_code=True
+                        )
+                        print("Model loaded with 8-bit quantization!")
+                    except ImportError:
+                        print("BitsAndBytes not available, loading without quantization...")
+                        self._load_qwen25_standard()
+                    except Exception as quant_error:
+                        print(f"Quantization failed: {quant_error}, trying standard loading...")
+                        self._load_qwen25_standard()
+                else:
+                    self._load_qwen25_standard()
+
+            else:
+                # For Qwen2-VL models
+                from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+                print("Loading processor...")
+                self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
+                print("Loading model...")
+                self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                    device_map="auto" if self.device == "cuda" else None,
+                    trust_remote_code=True
+                )
+            print(f"Model {self.model_name} loaded successfully on {self.device}!")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            print("Try restarting the application or check your internet connection.")
+            raise
+
+    def _load_qwen25_standard(self):
+        """Load Qwen2.5-VL model with standard approach and memory fallbacks"""
+        from transformers import Qwen2_5_VLForConditionalGeneration
+
+        try:
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                self.model_name,
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
                 device_map="auto" if self.device == "cuda" else None,
                 trust_remote_code=True
             )
-            print(f"Model {self.model_name} loaded successfully!")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
+        except RuntimeError as cuda_error:
+            if "out of memory" in str(cuda_error).lower():
+                print("CUDA out of memory, falling back to CPU...")
+                self.device = "cpu"
+                try:
+                    self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                        self.model_name,
+                        torch_dtype=torch.float32,
+                        device_map=None,
+                        trust_remote_code=True
+                    ).to("cpu")
+                except RuntimeError as cpu_error:
+                    print(f"CPU loading also failed: {cpu_error}")
+                    print("The Qwen2.5-VL-7B model requires more memory than available.")
+                    print("Consider using a smaller model or upgrading your hardware.")
+                    raise cpu_error
+            else:
+                raise cuda_error
     
-    def detect_signature_regions_opencv(self, image_path: str) -> List[Dict]:
+    def detect_signature_regions_yolo(self, image_path: str) -> List[Dict]:
         """
-        Advanced signature detection using OpenCV and image processing
-        
+        Advanced signature detection using YOLOv8 object detection
+
         Args:
             image_path: Path to the document image
-            
+
+        Returns:
+            List of detected signature regions with metadata
+        """
+        if self.yolo_model is None:
+            print("YOLO model not available, falling back to OpenCV detection")
+            return self.detect_signature_regions_opencv(image_path)
+
+        try:
+            # Load image
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Could not load image: {image_path}")
+
+            # Run YOLO detection
+            results = self.yolo_model(image, conf=0.3, verbose=False)
+
+            regions = []
+
+            # Process detections
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        # Get bounding box coordinates
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        conf = box.conf[0].cpu().numpy()
+                        cls = int(box.cls[0].cpu().numpy())
+
+                        # Calculate area and aspect ratio
+                        w = x2 - x1
+                        h = y2 - y1
+                        area = w * h
+                        aspect_ratio = w / h if h > 0 else 0
+
+                        # Filter for signature-like regions based on size and aspect ratio
+                        # Signatures are typically small to medium sized objects
+                        image_area = image.shape[0] * image.shape[1]
+                        relative_area = area / image_area
+
+                        # Signature criteria:
+                        # - Reasonable size (not too small, not dominating the image)
+                        # - Aspect ratio between 1:1 and 5:1 (typical for signatures)
+                        # - Reasonable confidence from YOLO
+                        if (0.001 < relative_area < 0.3 and
+                            0.5 < aspect_ratio < 5.0 and
+                            conf > 0.3):
+
+                            regions.append({
+                                'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                'area': area,
+                                'aspect_ratio': aspect_ratio,
+                                'method': 'yolo_detection',
+                                'confidence': float(conf),
+                                'yolo_class': cls,
+                                'relative_area': relative_area
+                            })
+
+            # If no regions detected with YOLO, fall back to OpenCV
+            if not regions:
+                print("No signature-like regions detected with YOLO, falling back to OpenCV")
+                return self.detect_signature_regions_opencv(image_path)
+
+            # Remove duplicate regions and merge overlapping ones
+            regions = self._merge_overlapping_regions(regions)
+
+            # Sort by confidence and return top candidates
+            regions.sort(key=lambda x: x['confidence'], reverse=True)
+
+            return regions[:5]  # Return top 5 candidates
+
+        except Exception as e:
+            print(f"Error in YOLO detection: {e}, falling back to OpenCV")
+            return self.detect_signature_regions_opencv(image_path)
+
+    def detect_signature_regions_opencv(self, image_path: str) -> List[Dict]:
+        """
+        Fallback signature detection using OpenCV and image processing
+
+        Args:
+            image_path: Path to the document image
+
         Returns:
             List of detected signature regions with metadata
         """
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"Could not load image: {image_path}")
-        
+
         # Convert to different color spaces for better detection
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        
+
         # Apply multiple detection methods
         regions = []
-        
+
         # Method 1: Edge detection
         edges = cv2.Canny(gray, 50, 150)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         for contour in contours:
             area = cv2.contourArea(contour)
             if area > 1000:  # Filter small regions
                 x, y, w, h = cv2.boundingRect(contour)
                 aspect_ratio = w / h
-                
+
                 # Signature-like regions typically have specific aspect ratios
                 if 0.5 < aspect_ratio < 4.0 and area > 2000:
                     regions.append({
@@ -123,20 +299,20 @@ class AdvancedSignatureDetector:
                         'method': 'edge_detection',
                         'confidence': min(area / 10000, 1.0)
                     })
-        
+
         # Method 2: Color-based detection (look for dark regions)
         lower_black = np.array([0, 0, 0])
         upper_black = np.array([180, 255, 50])
         mask = cv2.inRange(hsv, lower_black, upper_black)
-        
+
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         for contour in contours:
             area = cv2.contourArea(contour)
             if area > 1500:
                 x, y, w, h = cv2.boundingRect(contour)
                 aspect_ratio = w / h
-                
+
                 if 0.3 < aspect_ratio < 5.0:
                     regions.append({
                         'bbox': [x, y, x+w, y+h],
@@ -145,18 +321,18 @@ class AdvancedSignatureDetector:
                         'method': 'color_detection',
                         'confidence': min(area / 8000, 1.0)
                     })
-        
+
         # Method 3: Template matching for signature-like patterns
         # This is a simplified approach - in practice, you'd use more sophisticated templates
         kernel = np.ones((3,3), np.uint8)
         morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-        
+
         # Remove duplicate regions and merge overlapping ones
         regions = self._merge_overlapping_regions(regions)
-        
+
         # Sort by confidence and return top candidates
         regions.sort(key=lambda x: x['confidence'], reverse=True)
-        
+
         return regions[:5]  # Return top 5 candidates
     
     def _merge_overlapping_regions(self, regions: List[Dict], iou_threshold: float = 0.3) -> List[Dict]:
@@ -223,6 +399,13 @@ class AdvancedSignatureDetector:
         if signature_region:
             x1, y1, x2, y2 = signature_region
             image = image.crop((x1, y1, x2, y2))
+
+        # Resize large images for faster processing while maintaining quality
+        max_size = 1024  # Maximum dimension
+        if max(image.size) > max_size:
+            ratio = max_size / max(image.size)
+            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
         
         # Create comprehensive signature analysis prompt
         prompt = """
@@ -269,22 +452,25 @@ class AdvancedSignatureDetector:
         
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.processor(
-            text=[text], 
-            images=[image], 
-            videos=None, 
+            text=[text],
+            images=[image],
+            videos=None,
             return_tensors="pt"
         )
-        
+
+        # Move inputs to the same device as the model
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=2048,
+                max_new_tokens=1024,
                 do_sample=False,
                 temperature=0.1
             )
         
         generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs['input_ids'], generated_ids)
         ]
         
         analysis = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
@@ -522,28 +708,38 @@ class AdvancedSignatureDetector:
     
     def find_similar_signatures_advanced(self, query_features: Dict, threshold: float = 0.7) -> List[Dict]:
         """
-        Find similar signatures using advanced similarity metrics
-        
+        Find similar signatures using advanced similarity metrics with caching
+
         Args:
             query_features: Features of the query signature
             threshold: Similarity threshold (0-1)
-            
+
         Returns:
             List of similar signatures with detailed similarity scores
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM signatures')
-        rows = cursor.fetchall()
-        conn.close()
-        
+        # Check cache validity (invalidate after 5 minutes or if not loaded)
+        current_time = datetime.now()
+        if (self.signatures_cache is None or
+            self.cache_timestamp is None or
+            (current_time - self.cache_timestamp).seconds > 300):
+
+            # Load fresh data from database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM signatures')
+            rows = cursor.fetchall()
+            conn.close()
+
+            # Cache the data
+            self.signatures_cache = rows
+            self.cache_timestamp = current_time
+
         similar_signatures = []
-        
-        for row in rows:
+
+        for row in self.signatures_cache:
             stored_features = json.loads(row[4])  # signature_features column
             similarities = self.calculate_advanced_similarity(query_features, stored_features)
-            
+
             if similarities["overall_similarity"] >= threshold:
                 similar_signatures.append({
                     "id": row[0],
@@ -555,10 +751,10 @@ class AdvancedSignatureDetector:
                     "model_used": row[8],
                     "confidence_score": row[9]
                 })
-        
+
         # Sort by overall similarity score
         similar_signatures.sort(key=lambda x: x["overall_score"], reverse=True)
-        
+
         return similar_signatures
     
     def process_document_advanced(self, image_path: str, user_id: str = None) -> Dict:
@@ -573,8 +769,8 @@ class AdvancedSignatureDetector:
             Complete processing results with advanced analysis
         """
         try:
-            # Step 1: Detect signature regions using OpenCV
-            regions = self.detect_signature_regions_opencv(image_path)
+            # Step 1: Detect signature regions using YOLOv8
+            regions = self.detect_signature_regions_yolo(image_path)
             
             # Step 2: Process each detected region
             signature_results = []

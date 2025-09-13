@@ -1,0 +1,22 @@
+# Modern Web UI Requirements (No Gradio)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+pillow>=10.0.0
+numpy>=1.24.0
+
+# AI/ML Dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.37.0
+accelerate>=0.24.0
+ultralytics>=8.0.0
+bitsandbytes>=0.41.0
+
+# Data Processing
+pandas>=1.5.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Database
+sqlite3  # Built-in with Python

@@ -13,14 +13,19 @@ class AdvancedSignatureUI:
         self.current_model = None
         
     def load_model(self, model_name):
-        """Load the specified Qwen model"""
+        """Load the specified Qwen model and YOLOv8"""
         try:
-            self.detector = AdvancedSignatureDetector(model_name)
+            self.detector = AdvancedSignatureDetector(
+                model_name=model_name,
+                yolo_weights_path="weights/yolov8s.pt",
+                use_quantization=True  # Enable quantization for memory efficiency
+            )
             self.detector.load_model()
             self.current_model = model_name
-            return f"✅ Model {model_name} loaded successfully!"
+            device_info = f"on {self.detector.device}"
+            return f"✅ Models loaded successfully!\n  • Qwen: {model_name} {device_info}\n  • YOLOv8: yolov8s.pt"
         except Exception as e:
-            return f"❌ Error loading model: {str(e)}"
+            return f"❌ Error loading models: {str(e)}"
     
     def process_image(self, image, user_id, similarity_threshold):
         """Process uploaded image for signature detection and analysis"""
@@ -54,9 +59,10 @@ class AdvancedSignatureUI:
             """
             
             for i, region in enumerate(result['detected_regions']):
+                method_display = "YOLOv8 Detection" if region['method'] == 'yolo_detection' else region['method'].replace('_', ' ').title()
                 summary += f"""
             Region {i+1}:
-            - Method: {region['method']}
+            - Method: {method_display}
             - Confidence: {region['confidence']:.2f}
             - Area: {region['area']:.0f} pixels
             - Aspect Ratio: {region['aspect_ratio']:.2f}
@@ -216,10 +222,10 @@ class AdvancedSignatureUI:
         with gr.Blocks(title="Advanced Signature Detection & Comparison System", theme=gr.themes.Soft()) as interface:
             gr.Markdown("""
             # 🔍 Advanced Signature Detection & Comparison System
-            
-            This system uses Qwen Vision Language Models and advanced OpenCV techniques for:
-            - **Multi-method signature detection** (Edge detection, Color analysis, Template matching)
-            - **Advanced feature extraction** using VLM analysis
+
+            This system uses **YOLOv8 object detection** and **Qwen Vision Language Models** for:
+            - **YOLOv8-powered signature detection** with OpenCV fallback
+            - **Advanced feature extraction** using Qwen VLM analysis
             - **Comprehensive similarity comparison** with multiple metrics
             - **Signature verification and matching**
             """)
@@ -231,11 +237,9 @@ class AdvancedSignatureUI:
                         with gr.Column():
                             model_dropdown = gr.Dropdown(
                                 choices=[
-                                    "Qwen/Qwen2-VL-2B-Instruct",
-                                    "Qwen/Qwen2.5-VL-7B-Instruct",
-                                    "Qwen/Qwen2.5-VL-32B-Instruct"
+                                    "Qwen/Qwen2.5-VL-7B-Instruct"
                                 ],
-                                value="Qwen/Qwen2-VL-2B-Instruct",
+                                value="Qwen/Qwen2.5-VL-7B-Instruct",
                                 label="Select Model"
                             )
                             load_model_btn = gr.Button("Load Model", variant="primary")
@@ -308,7 +312,7 @@ def main():
     """Main function to launch the interface"""
     ui = AdvancedSignatureUI()
     interface = ui.create_interface()
-    interface.launch(server_name="0.0.0.0", server_port=7860, share=True)
+    interface.launch(server_name="0.0.0.0", server_port=7860, share=False)
 
 if __name__ == "__main__":
     main()

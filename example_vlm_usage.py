@@ -17,7 +17,7 @@ def main():
     print("Initializing VLM Signature Detector...")
     detector = VLMSignatureDetector(
         yolo_model_path="weights/yolov8s.pt",
-        vlm_model_name="Qwen/Qwen2-VL-2B-Instruct",
+        vlm_model_name="Qwen/Qwen2.5-VL-7B-Instruct ",
         confidence_threshold=0.5
     )
     print("✓ Detector initialized successfully!")

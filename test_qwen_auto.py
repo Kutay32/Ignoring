@@ -5,7 +5,7 @@ Test script using AutoModel to load Qwen 2.5-VL
 
 import torch
 import sys
-from transformers import AutoModel, AutoTokenizer, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 
 def test_qwen_auto_loading():
     """Test loading Qwen 2.5-VL model using AutoModel"""
@@ -31,7 +31,7 @@ def test_qwen_auto_loading():
         # Load model using AutoModel
         print("Loading model with AutoModel...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = AutoModel.from_pretrained(
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_name,
             torch_dtype=torch.float16 if device == "cuda" else torch.float32,
             device_map="auto" if device == "cuda" else None,
@@ -65,6 +65,22 @@ def test_qwen_auto_loading():
         )
         print("✅ Text tokenized successfully")
         
+        # Test generation
+        print("Testing generation...")
+        with torch.no_grad():
+            generated_ids = model.generate(
+                **image_inputs,
+                max_new_tokens=10,
+                do_sample=False
+            )
+        
+        generated_ids = [
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(image_inputs.input_ids, generated_ids)
+        ]
+        
+        response = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        print(f"✅ Generation successful: {response}")
+        
         print("\n🎉 Qwen model loading test PASSED!")
         return True
         
@@ -92,7 +108,7 @@ def test_smaller_model():
         # Load model
         print("Loading model...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = AutoModel.from_pretrained(
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_name,
             torch_dtype=torch.float16 if device == "cuda" else torch.float32,
             device_map="auto" if device == "cuda" else None,

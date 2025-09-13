@@ -4,7 +4,7 @@ Simple test to verify Qwen model loading works
 """
 
 import torch
-from transformers import AutoModel, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 
 def test_simple_loading():
     """Test simple model loading"""
@@ -18,12 +18,19 @@ def test_simple_loading():
         print("✅ Processor loaded")
         
         print("Loading model...")
-        model = AutoModel.from_pretrained(
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_name,
             torch_dtype=torch.float32,  # Use float32 for CPU
             trust_remote_code=True
         )
         print("✅ Model loaded")
+        
+        # Test that the model has the generate method
+        if hasattr(model, 'generate'):
+            print("✅ Model has generate method!")
+        else:
+            print("❌ Model does not have generate method!")
+            return False
         
         return True
         

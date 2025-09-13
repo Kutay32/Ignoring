@@ -5,6 +5,11 @@ from PIL import Image
 import json
 import sqlite3
 from typing import List, Dict, Tuple, Optional
+from transformers import AutoModel, AutoTokenizer, AutoProcessor
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 import os
 from datetime import datetime
 
@@ -48,8 +53,6 @@ class SignatureExtractor:
         """Load the specified Qwen model"""
         print(f"Loading {self.model_name}...")
         try:
-            from transformers import AutoModel, AutoProcessor
-            
             self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
             self.model = AutoModel.from_pretrained(
                 self.model_name, 
@@ -64,7 +67,6 @@ class SignatureExtractor:
             if "7B" in self.model_name or "32B" in self.model_name or "72B" in self.model_name:
                 print("Trying with smaller 2B model due to memory constraints...")
                 self.model_name = "Qwen/Qwen2-VL-2B-Instruct"
-                from transformers import AutoModel, AutoProcessor
                 self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
                 self.model = AutoModel.from_pretrained(
                     self.model_name, 
@@ -122,7 +124,7 @@ class SignatureExtractor:
         ]
         
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(
+        image_inputs, video_inputs = self.processor(
             text=[text], 
             images=[image_path], 
             videos=None, 
@@ -131,13 +133,13 @@ class SignatureExtractor:
         
         with torch.no_grad():
             generated_ids = self.model.generate(
-                **inputs,
+                **image_inputs,
                 max_new_tokens=512,
                 do_sample=False
             )
         
         generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(image_inputs.input_ids, generated_ids)
         ]
         
         response = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
@@ -226,7 +228,7 @@ class SignatureExtractor:
         ]
         
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(
+        image_inputs, video_inputs = self.processor(
             text=[text], 
             images=[image], 
             videos=None, 
@@ -235,13 +237,13 @@ class SignatureExtractor:
         
         with torch.no_grad():
             generated_ids = self.model.generate(
-                **inputs,
+                **image_inputs,
                 max_new_tokens=1024,
                 do_sample=False
             )
         
         generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(image_inputs.input_ids, generated_ids)
         ]
         
         analysis = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
@@ -299,13 +301,8 @@ class SignatureExtractor:
         Returns:
             IoU similarity score (0-1)
         """
-        # Simple text similarity calculation
-        def simple_text_similarity(text1, text2):
-            words1 = set(text1.lower().split())
-            words2 = set(text2.lower().split())
-            intersection = words1.intersection(words2)
-            union = words1.union(words2)
-            return len(intersection) / len(union) if len(union) > 0 else 0
+        # Convert features to comparable vectors
+        vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
         
         # Combine all text features
         text1 = " ".join([
@@ -322,10 +319,16 @@ class SignatureExtractor:
             features2.get("style_classification", "")
         ])
         
-        # Calculate similarity
-        similarity = simple_text_similarity(text1, text2)
+        # Create TF-IDF vectors
+        tfidf_matrix = vectorizer.fit_transform([text1, text2])
         
-        return similarity
+        # Calculate cosine similarity
+        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        
+        # Convert to IoU-like metric
+        iou_score = (similarity + 1) / 2  # Normalize from [-1,1] to [0,1]
+        
+        return iou_score
     
     def store_signature(self, user_id: str, signature_data: Dict, image_path: str):
         """Store signature data in database"""

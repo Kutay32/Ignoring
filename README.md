@@ -19,7 +19,7 @@ A comprehensive system for extracting, analyzing, and comparing document signatu
 1. **Clone the repository**:
 ```bash
 git clone https://github.com/Kutay32/Ignoring.git
-cd signature-extraction-system
+cd Ignoring
 ```
 
 2. **Install dependencies**:
